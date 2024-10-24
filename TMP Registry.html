@@ -1,0 +1,534 @@
+// Written by Johnston Wang, 23/10/24
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="initial-scale=1.0">
+    <title>TMP Registry</title>
+    <script src='https://api.mapbox.com/mapbox-gl-js/v2.10.0/mapbox-gl.js'></script>
+    <link href='https://api.mapbox.com/mapbox-gl-js/v2.10.0/mapbox-gl.css' rel='stylesheet' />
+    <style>
+        body { margin: 0; padding: 0; }
+        #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+        .tooltip {
+            background-color: white;
+            padding: 5px;
+            border-radius: 3px;
+            box-shadow: 0 0 3px rgba(0, 0, 0, 0.5);
+            pointer-events: none;
+            position: absolute;
+            z-index: 10;
+            display: none;
+        }
+        #legend {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        .legend-key {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+            cursor: pointer;
+        }
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+        }
+        #searchBar {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            z-index: 1;
+        }
+        #dateFilter {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background-color: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div class="tooltip" id="tooltip"></div>
+    <div id="searchBar">
+        <input type="text" id="address" placeholder="Enter an address" autocomplete="off" />
+        <button id="searchBtn">Search</button>
+        <div id="suggestions" style="position: absolute; background: white; border: 1px solid #ccc; z-index: 10; display: none;"></div>
+    </div>
+
+    <div id="modal" class="modal">
+        <div class="modal-content">
+            <span class="close-button">&times;</span>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <style>
+        .modal {
+    display: none;
+    position: fixed; 
+    z-index: 1; 
+    left: 0;
+    top: 0;
+    width: 100%; 
+    height: 100%; 
+    overflow: auto; 
+    background-color: rgba(0, 0, 0, 0.6);
+}
+
+.modal-content {
+    background-color: #fefefe;
+    margin: 10% auto;
+    padding: 10px; 
+    border: 1px solid #888;
+    width: 25%;
+    max-height: 80%; 
+    overflow-y: auto; 
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+}
+
+.modal-content p {
+    margin: 5px 0;
+    line-height: 1.2;
+}
+
+.close-button {
+    color: #aaa;
+    float: right;
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.close-button:hover,
+.close-button:focus {
+    color: black;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+        </style>
+
+
+    <div id="legend">
+        <div class="legend-key" data-layer="Road Closed">
+            <div class="legend-color" style="background-color: #da0796;"></div>
+            <span>Road Closed</span>
+        </div>
+        <div class="legend-key" data-layer="Lane Closure">
+            <div class="legend-color" style="background-color: #ff8819;"></div>
+            <span>Lane Closure</span>
+        </div>
+        <div class="legend-key" data-layer="Temporary Traffic Signals">
+            <div class="legend-color" style="background-color: #294184;"></div>
+            <span>Temporary Traffic Signals</span>
+        </div>
+        <div class="legend-key" data-layer="Truck Site Access">
+            <div class="legend-color" style="background-color: #1891c9;"></div>
+            <span>Truck Site Access</span>
+        </div>
+        <div class="legend-key" data-layer="No Traffic Impacts">
+            <div class="legend-color" style="background-color: #87d30f;"></div>
+            <span>No Traffic Impacts</span>
+        </div>
+        <div class="legend-key" data-layer="Not Defined">
+            <div class="legend-color" style="background-color: #cb0d0c;"></div>
+            <span>Not Defined</span>
+        </div>
+    </div>
+    
+    <div id="dateFilter">
+        <input type="date" id="dateInput" />
+        <input type="range" id="slider" min="0" max="100" />
+    </div>
+    
+    <script>
+        mapboxgl.accessToken = 'pk.eyJ1Ijoiam9obnN0b253IiwiYSI6ImNtMmIxNDRuZzBueGkycm9teG5mcXNqeWEifQ.98yyaDXx0p9HVr3nuNibrA';
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/streets-v11',
+            center: [144.646838,-37.712344],
+            zoom: 11
+        });
+    
+        const tooltip = document.getElementById('tooltip');
+        const dateInput = document.getElementById('dateInput');
+        const slider = document.getElementById('slider');
+        const visibilityStates = {};
+    
+        document.querySelectorAll('.legend-key').forEach(item => {
+            const layerId = item.getAttribute('data-layer');
+            visibilityStates[layerId] = true; 
+        });
+    
+        // Add event listeners to legend items
+        document.querySelectorAll('.legend-key').forEach(item => {
+            item.addEventListener('click', () => {
+                const layerId = item.getAttribute('data-layer');
+                const currentVisibility = visibilityStates[layerId] ? 'visible' : 'none';
+                const newVisibility = currentVisibility === 'visible' ? 'none' : 'visible';
+                visibilityStates[layerId] = newVisibility === 'visible';
+                item.style.opacity = visibilityStates[layerId] ? '1' : '0.5';
+                filterDataBasedOnVisibilityAndDate(); 
+            });
+        });
+
+   
+// Bind search box to area   
+const bbox = [144.439004, -37.857166, 144.829723, -37.464500]; // [westLng, southLat, eastLng, northLat]
+
+// Event listener for Search
+const addressInput = document.getElementById('address');
+const suggestionsDiv = document.getElementById('suggestions');
+
+// Event listener for input changes
+addressInput.addEventListener('input', function() {
+    const query = this.value;
+
+    if (query.length > 2) {
+        const geocodeUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?bbox=${bbox.join(',')}&access_token=${mapboxgl.accessToken}`;
+
+        fetch(geocodeUrl)
+            .then(response => response.json())
+            .then(data => {
+                suggestionsDiv.innerHTML = '';
+                
+                if (data.features && data.features.length > 0) {
+                    suggestionsDiv.style.display = 'block'; 
+                    data.features.forEach(feature => {
+                        const suggestionItem = document.createElement('div');
+
+                        // Set inline styles for the suggestion item
+                        suggestionItem.textContent = feature.place_name; 
+                        suggestionItem.style.cursor = 'pointer';
+                        suggestionItem.style.padding = '5px';
+                        suggestionItem.style.borderBottom = '1px solid #ddd'; 
+                        suggestionItem.style.backgroundColor = 'white';
+                        suggestionItem.style.transition = 'background-color 0.2s'; 
+
+                        // Change background color on hover
+                        suggestionItem.addEventListener('mouseenter', () => {
+                            suggestionItem.style.backgroundColor = '#f0f0f0';
+                        });
+                        suggestionItem.addEventListener('mouseleave', () => {
+                            suggestionItem.style.backgroundColor = 'white';
+                        });
+
+                        suggestionItem.addEventListener('click', () => {
+                            selectSuggestion(feature);
+                        });
+                        suggestionsDiv.appendChild(suggestionItem);
+                    });
+                } else {
+                    suggestionsDiv.style.display = 'none';
+                }
+            })
+            .catch(error => {
+                console.error('Error fetching geocode suggestions:', error);
+            });
+    } else {
+        suggestionsDiv.style.display = 'none';
+    }
+});
+
+
+// Function to handle selecting a suggestion
+function selectSuggestion(feature) {
+    addressInput.value = feature.place_name; 
+    suggestionsDiv.style.display = 'none'; 
+    const coordinates = feature.geometry.coordinates;
+
+    map.flyTo({
+        center: coordinates,
+        zoom: 15
+    });
+    // Clear input
+    addressInput.value = '';
+
+    // Marker
+    new mapboxgl.Marker()
+        .setLngLat(coordinates)
+        .addTo(map);
+}
+
+
+// Function to parse the date string (YYYY-MM-DD) into a JavaScript Date object
+function parseDateString(dateString) {
+    if (!dateString) return null;
+
+    const [year, month, day] = dateString.split('-');
+    return new Date(year, month - 1, day);
+}
+
+// Function to filter data based on selected date and visible statuses
+function filterDataBasedOnVisibilityAndDate() {
+    const geojsonData = window.originalSource1Data; 
+    const visibleStatuses = Object.keys(visibilityStates).filter(layerId => visibilityStates[layerId]);
+    const selectedDate = new Date(dateInput.value);
+    
+    // Check validity
+    if (isNaN(selectedDate.getTime())) {
+        console.error("Selected date is invalid:", selectedDate);
+        return;
+    }
+
+    // Set the selected date to the start of the day
+    selectedDate.setHours(0, 0, 0, 0);
+
+    // Filter features based on visible statuses and date
+    const filteredFeatures = geojsonData.features.filter(feature => {
+        const startDateStr = feature.properties.road_work_start_date;
+        const endDateStr = feature.properties.road_work_end_date;
+
+        const roadWorkStart = parseDateString(startDateStr); 
+        const roadWorkEnd = parseDateString(endDateStr);
+        
+        const isStatusVisible = feature.properties.status && visibleStatuses.includes(feature.properties.status.trim());
+
+        // Check date logic (mayb add an "active/planned" option, ie active check between, future planned checks all that havent occurred yet ie., today<end date (no start date considered))
+        const isDateValid = (roadWorkStart && roadWorkEnd) 
+            ? (selectedDate >= roadWorkStart && selectedDate <= roadWorkEnd)
+            : (roadWorkStart ? selectedDate >= roadWorkStart : roadWorkEnd && selectedDate <= roadWorkEnd);
+
+        return isStatusVisible && isDateValid;
+    });
+
+    const filteredGeoJson = {
+        type: 'FeatureCollection',
+        features: filteredFeatures
+    };
+
+    // Update the source with the filtered data
+    map.getSource('Source1').setData(filteredGeoJson);
+}
+
+        // Event listener for date input (manual input)
+        dateInput.addEventListener('change', function() {
+            const selectedDate = this.value;
+            slider.value = new Date(selectedDate).getTime(); 
+            filterDataBasedOnVisibilityAndDate();
+        });
+    
+        // Event listener for slider input (date slider)
+        slider.addEventListener('input', function() {
+            const selectedDate = new Date(parseInt(this.value));
+            dateInput.value = selectedDate.toISOString().slice(0, 10); 
+            filterDataBasedOnVisibilityAndDate();
+        });
+    
+// Initialize map with sources
+map.on('load', function () {
+    const today = new Date();
+    const sixMonthsPast = new Date();
+    sixMonthsPast.setMonth(today.getMonth() - 6);
+
+    const sixMonthsFuture = new Date();
+    sixMonthsFuture.setMonth(today.getMonth() + 6);
+
+    // Update slider attributes
+    slider.min = sixMonthsPast.getTime();
+    slider.max = sixMonthsFuture.getTime();
+    slider.value = today.getTime();
+    dateInput.value = today.toISOString().slice(0, 10);
+
+    // Fetch and store the original data for filtering
+    fetch('https://web.fulcrumapp.com/shares/7720c6835056cfa0.geojson')
+        .then(response => response.json())
+        .then(data => {
+            window.originalSource1Data = data; 
+            addGeoJsonData('https://web.fulcrumapp.com/shares/7720c6835056cfa0.geojson', 'Source1');
+        });
+});
+
+function addGeoJsonData(geojsonUrl, sourceId) {
+    fetch(geojsonUrl)
+        .then(response => response.json())
+        .then(data => {
+            map.addSource(sourceId, {
+                type: 'geojson',
+                data: data
+            });
+
+            // Points layer
+            map.addLayer({
+                'id': `${sourceId}-points-layer`,
+                'type': 'circle',
+                'source': sourceId,
+                'filter': ['==', '$type', 'Point'],
+                'paint': {
+                    'circle-radius': 5,
+                    'circle-color': [
+                        'case',
+                        ['==', ['get', 'status'], 'Road Closed'], '#da0796',
+                        ['==', ['get', 'status'], ' Lane Closure'], '#ff8819',
+                        ['==', ['get', 'status'], 'Temporary Traffic Signals'], '#294184',
+                        ['==', ['get', 'status'], 'Truck Site Access'], '#1891c9',
+                        ['==', ['get', 'status'], 'No Traffic Impacts'], '#87d30f',
+                        ['==', ['get', 'status'], 'Not Defined'], '#cb0d0c',
+                        '#888888'
+                    ]
+                }
+            });
+
+            // Line layer
+            map.addLayer({
+                'id': `${sourceId}-lines-layer`,
+                'type': 'line',
+                'source': sourceId,
+                'filter': ['==', '$type', 'LineString'],
+                'paint': {
+                    'line-width': 3,
+                    'line-color': [
+                        'case',
+                        ['==', ['get', 'status'], 'Road Closed'], '#da0796',
+                        ['==', ['get', 'status'], ' Lane Closure'], '#ff8819',
+                        ['==', ['get', 'status'], 'Temporary Traffic Signals'], '#294184',
+                        ['==', ['get', 'status'], 'Truck Site Access'], '#1891c9',
+                        ['==', ['get', 'status'], 'No Traffic Impacts'], '#87d30f',
+                        ['==', ['get', 'status'], 'Not Defined'], '#cb0d0c',
+                        '#888888'
+                    ]
+                }
+            });
+
+            // Polygon layer
+            map.addLayer({
+                'id': `${sourceId}-polygons-layer`,
+                'type': 'fill',
+                'source': sourceId,
+                'filter': ['==', '$type', 'Polygon'],
+                'paint': {
+                    'fill-color': [
+                        'case',
+                        ['==', ['get', 'status'], 'Road Closed'], '#da0796',
+                        ['==', ['get', 'status'], ' Lane Closure'], '#ff8819',
+                        ['==', ['get', 'status'], 'Temporary Traffic Signals'], '#294184',
+                        ['==', ['get', 'status'], 'Truck Site Access'], '#1891c9',
+                        ['==', ['get', 'status'], 'No Traffic Impacts'], '#87d30f',
+                        ['==', ['get', 'status'], 'Not Defined'], '#cb0d0c',
+                        '#888888'
+                    ],
+                    'fill-opacity': 0.5
+                }
+            });
+
+
+// Create a popup
+const popup = new mapboxgl.Popup({
+    closeButton: false,
+    closeOnClick: false
+});
+
+// Define layers to interact with (points, lines, polygons)
+const layers = [`${sourceId}-points-layer`, `${sourceId}-lines-layer`, `${sourceId}-polygons-layer`];
+
+// Show tooltip on hover
+layers.forEach(layer => {
+    map.on('mouseenter', layer, (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const coordinates = e.features[0].geometry.coordinates.slice();
+        const properties = e.features[0].properties;
+
+        // Create tooltip
+        const tooltipContent = `
+            <strong>Road Name:</strong> ${properties.road || 'N/A'}<br>
+            <strong>Status:</strong> ${properties.status || 'N/A'}<br>
+            <strong>Road Work Start Date:</strong> ${properties.road_work_start_date || 'N/A'}<br>
+            <strong>Road Work End Date:</strong> ${properties.road_work_end_date || 'N/A'}
+        `;
+
+        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+            coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+        }
+
+        // Display the tooltip
+        popup.setLngLat(coordinates)
+            .setHTML(tooltipContent)
+            .addTo(map);
+    });
+
+    // Hide tooltip on mouse leave
+    map.on('mouseleave', layer, () => {
+        map.getCanvas().style.cursor = '';
+        popup.remove();
+    });
+
+    // Click event to show modal popup
+    map.on('click', layer, (e) => {
+        const properties = e.features[0].properties;
+
+        let modalContent = `<h3>${properties.road || 'N/A'}</h3>`;
+
+        // Array of fields
+        const fields = [
+            { label: 'Status', value: properties.status },
+            { label: 'From Road', value: properties.from_road },
+            { label: 'To Road', value: properties.to_road },
+            { label: 'Description of Works', value: properties.description_of_works },
+            { label: 'Road Work Start Date', value: properties.road_work_start_date },
+            { label: 'Road Work End Date', value: properties.road_work_end_date },
+            { label: 'Traffic Impact', value: properties.traffic_impact },
+            { label: 'Road Work Type', value: properties.road_work_type },
+            { label: 'Expected Delay', value: properties.expected_delay },
+            { label: 'Application Company', value: properties.application_company },
+            { label: 'Applicant Contact', value: properties.applicant_contact_ },
+            { label: 'Applicant Contact Number', value: properties.applicant_contact_number },
+            { label: 'Application Type', value: properties.application_type },
+            { label: 'Authorisation Officer', value: properties.authorisation_officer },
+            { label: 'Council Project', value: properties.council_project },
+            { label: 'Council Project Manager', value: properties.council_project_manager },
+            { label: 'Project Manager Email', value: properties.project_manager_email },
+            { label: 'Project Manager Phone Number', value: properties.project_manager_phone_number },
+            { label: 'Site Supervisor', value: properties.site_supervisor },
+            { label: 'Site Supervisor Contact', value: properties.site_supervisor_contact },
+            { label: 'Site Visit Required', value: properties.site_visit_required },
+            { label: 'VMS Required', value: properties.vms_required },
+            { label: 'Origin of Project', value: properties.origin_of_project },
+        ];
+
+        // Hide empty fields in modal popup
+        fields.forEach(field => {
+            if (field.value) {
+                modalContent += `<p><strong>${field.label}:</strong> ${field.value}</p>`;
+            }
+        });
+
+        // Set the modal body content
+        document.getElementById('modal-body').innerHTML = modalContent;
+        document.getElementById('modal').style.display = 'block';
+    });
+});
+
+// Close modal on x click
+document.querySelector('.close-button').onclick = function() {
+    document.getElementById('modal').style.display = 'none';
+};
+
+// Close the modal when the user clicks anywhere outside of the modal
+window.onclick = function(event) {
+    const modal = document.getElementById('modal');
+    if (event.target === modal) {
+        modal.style.display = 'none';
+    }
+};
+
+
+        });
+}
+
+    </script>
+</body>
+</html>
